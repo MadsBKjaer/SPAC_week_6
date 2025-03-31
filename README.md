@@ -1,2 +1,3 @@
-# w6
- ETL processes
+# ETL processes
+
+![screenshot](images/initial_schema.jpg)
