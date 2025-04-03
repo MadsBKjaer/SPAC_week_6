@@ -1,11 +1,13 @@
-import polars as pl
 from os import path
+from environs import env
+from collections import defaultdict
+import polars as pl
 import requests
 import json
 import mysql.connector as sql
 
 
-class csv_connector:
+class ConnectorCSV:
     """
     Class for handling data retrieval from csv files.
     """
@@ -31,6 +33,11 @@ class csv_connector:
         ----------
         file_name: string
             Name of csv file. Should be full path to the file, if no folder_path was provided on initialization.
+
+        Returns
+        -------
+        output: pl.DataFrame
+            polars dataframe with data local CSV file.
         """
         file_name, file_extension = path.splitext(file_name)
 
@@ -45,19 +52,19 @@ class csv_connector:
         return pl.read_csv(full_path)
 
 
-class api_connector(csv_connector):
+class ConnectorAPI(ConnectorCSV):
     """
     Class for handling data retrieval from api.
     """
 
-    address: str | None
-    port: int | None
     folder_path: str | None
+    env_key: str
+    timeout: int
 
     def __init__(
         self,
-        address: str | None = None,
-        port: int | None = None,
+        env_key: str,
+        timeout: int = 2,
         folder_path: str | None = path.join("data", "api"),
     ):
         """
@@ -65,16 +72,16 @@ class api_connector(csv_connector):
 
         Parameters
         ----------
-        address: string or None, default None
-            address to direct requests towards. Will use csv_connector to retrieve data locally if address is not provided.
-        port: int or None, default None
-            port to use with the address.
-        folder_path: str or None, default None
+        env_key: str
+            Key for retrieving appropriate variables from .env file.
+        timeout: int | None, default 2
+            Timeout time in seconds.
+        folder_path: str or None, default os.path.join("data", "api")
             Folder to find local csv files in case bad http response or no provided address. If None the full path must be provided for methods asking for a file name.
         """
         super().__init__(folder_path)
-        self.address = address
-        self.port = port
+        self.env_key = env_key
+        self.timeout = timeout
 
     def get(self, file_name: str) -> pl.DataFrame:
         """
@@ -84,14 +91,22 @@ class api_connector(csv_connector):
         ----------
         file_name: str
             Name of file to direct api request to. Is also used as file name for retrieving data locally and should be full path to the file, if no folder_path = None on initialization.
+
+        Returns
+        -------
+        output: pl.DataFrame
+            polars dataframe with data from API or local CSV file.
         """
+        environment = defaultdict(lambda: None, env.dict(self.env_key))
         try:
-            assert self.address, "No address provided"
+            assert environment["address"], "No address found in .env"
 
             http_address: str = (
-                f"http://{":".join(filter(None, [self.address, self.port]))}/{file_name}"  # The join-filter combo ensures that ':' is added only if a port is specified.
+                f"http://{":".join(filter(None, [environment["address"], environment["port"]]))}/{file_name}"  # The join-filter combo ensures that ':' is added only if a port is specified.
             )
-            http_response: str = requests.get(http_address)
+            http_response: requests.Response = requests.get(
+                http_address, timeout=self.timeout
+            )
 
             assert (
                 http_response.status_code == 200
@@ -103,17 +118,19 @@ class api_connector(csv_connector):
             return super().get(file_name)
 
 
-class sql_connector(csv_connector):
+class ConnectorSQL(ConnectorCSV):
     """
     Class for handling data retrieval from MySQL server.
     """
 
-    connection_args: dict[str, str | int] | None
+    env_key: str
     folder_path: str | None
+    timeout: int
 
     def __init__(
         self,
-        connection_args: dict[str, str | int] | None = None,
+        env_key: str,
+        timeout: int = 2,
         folder_path: str | None = path.join("data", "db"),
     ):
         """
@@ -121,13 +138,16 @@ class sql_connector(csv_connector):
 
         Parameters
         ----------
-        connection_args: dict[str, str | int] or None, default None
-            key value arguments to pass to MySQL connector.
-        folder_path: string or None, default None
+        env_key: str
+            Key for retrieving appropriate variables from .env file.
+        timeout: int | None, default 2
+            Timeout time in seconds.
+        folder_path: string or None, default os.path.join("data", "db")
             Folder to find local csv files in case bad connection to database or if no connection arguments are provided. If None the full path must be provided for methods asking for a file name.
         """
         super().__init__(folder_path)
-        self.connection_args = connection_args
+        self.env_key = env_key
+        self.timeout = timeout
 
     def get(self, table_name: str) -> pl.DataFrame:
         """
@@ -139,13 +159,14 @@ class sql_connector(csv_connector):
             Name of table to retrieve. Is also used as file name for retrieving data locally and should be full path to the file, if no folder_path = None on initialization.
         """
         try:
-            assert self.connection_args, "No connection arguments provided"
-            connection = sql.connect(**self.connection_args)
+            connection = sql.connect(
+                **env.dict(self.env_key), connection_timeout=self.timeout
+            )
             cursor = connection.cursor(
                 dictionary=True
             )  # Ensure that the results are dictionaries, so that polars can understand it.
             cursor.execute(f"select * from {table_name}")
-            return pl.from_dicts(cursor.fetchall())
+            return pl.from_dicts(cursor.fetchall())  # type: ignore
         except Exception as e:
             print(e, "\nWill use local file instead")
             return super().get(table_name)
