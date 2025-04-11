@@ -98,6 +98,8 @@ class ConnectorAPI(ConnectorCSV):
             polars dataframe with data from API or local CSV file.
         """
         environment = defaultdict(lambda: None, env.dict(self.env_key))
+        if self.timeout == 0:
+            return super().get(file_name)
         try:
             assert environment["address"], "No address found in .env"
 
@@ -151,13 +153,20 @@ class ConnectorSQL(ConnectorCSV):
 
     def get(self, table_name: str) -> pl.DataFrame:
         """
-        Retrieves data from MySQL database and returns as a polars.DataFrame. Retrieves data from local csv if database failed.
+        _summary_
 
         Parameters
         ----------
         table_name: str
-            Name of table to retrieve. Is also used as file name for retrieving data locally and should be full path to the file, if no folder_path = None on initialization.
+            _description_
+
+        Returns
+        -------
+        pl.DataFrame
+            Polars dataframe with data from MySQL table or local csv file
         """
+        if self.timeout == 0:
+            return super().get(table_name)
         try:
             connection = sql.connect(
                 **env.dict(self.env_key), connection_timeout=self.timeout
