@@ -25,13 +25,13 @@ class ConnectorCSV:
         """
         self.folder_path = folder_path if folder_path is not None else ""
 
-    def get(self, file_name: str) -> pl.DataFrame:
+    def get(self, name: str) -> pl.DataFrame:
         """
         Retrieves data from local csv file and returns as a polars.DataFrame
 
         Parameters
         ----------
-        file_name: string
+        name: string
             Name of csv file. Should be full path to the file, if no folder_path was provided on initialization.
 
         Returns
@@ -39,14 +39,14 @@ class ConnectorCSV:
         output: pl.DataFrame
             polars dataframe with data local CSV file.
         """
-        file_name, file_extension = path.splitext(file_name)
+        name, file_extension = path.splitext(name)
 
         assert file_extension in [
             "",
             ".csv",
         ], f"Unsupported file extension: {repr(file_extension)}"
 
-        full_path: str = path.join(self.folder_path, f"{file_name}.csv")
+        full_path: str = path.join(self.folder_path, f"{name}.csv")
 
         assert path.isfile(full_path), f"No file found at {full_path}"
         return pl.read_csv(full_path)
@@ -57,7 +57,7 @@ class ConnectorAPI(ConnectorCSV):
     Class for handling data retrieval from api.
     """
 
-    folder_path: str | None
+    name: str | None
     env_key: str
     timeout: int
 
@@ -83,13 +83,13 @@ class ConnectorAPI(ConnectorCSV):
         self.env_key = env_key
         self.timeout = timeout
 
-    def get(self, file_name: str) -> pl.DataFrame:
+    def get(self, name: str) -> pl.DataFrame:
         """
         Retrieves data from api and returns as a polars.DataFrame. Retrieves data from local csv if api failed.
 
         Parameters
         ----------
-        file_name: str
+        name: str
             Name of file to direct api request to. Is also used as file name for retrieving data locally and should be full path to the file, if no folder_path = None on initialization.
 
         Returns
@@ -99,13 +99,11 @@ class ConnectorAPI(ConnectorCSV):
         """
         environment = defaultdict(lambda: None, env.dict(self.env_key))
         if self.timeout == 0:
-            return super().get(file_name)
+            return super().get(name)
         try:
             assert environment["address"], "No address found in .env"
 
-            http_address: str = (
-                f"http://{":".join(filter(None, [environment["address"], environment["port"]]))}/{file_name}"  # The join-filter combo ensures that ':' is added only if a port is specified.
-            )
+            http_address: str = f"http://{":".join(filter(None, [environment["address"], environment["port"]]))}/{name}"  # The join-filter combo ensures that ':' is added only if a port is specified.
             http_response: requests.Response = requests.get(
                 http_address, timeout=self.timeout
             )
@@ -117,7 +115,7 @@ class ConnectorAPI(ConnectorCSV):
             return pl.from_dicts(json.loads(http_response.json()))
         except Exception as e:
             print(e, "\nWill use local file instead")
-            return super().get(file_name)
+            return super().get(name)
 
 
 class ConnectorSQL(ConnectorCSV):
@@ -126,7 +124,7 @@ class ConnectorSQL(ConnectorCSV):
     """
 
     env_key: str
-    folder_path: str | None
+    name: str | None
     timeout: int
 
     def __init__(
@@ -151,13 +149,13 @@ class ConnectorSQL(ConnectorCSV):
         self.env_key = env_key
         self.timeout = timeout
 
-    def get(self, table_name: str) -> pl.DataFrame:
+    def get(self, name: str) -> pl.DataFrame:
         """
         _summary_
 
         Parameters
         ----------
-        table_name: str
+        name: str
             _description_
 
         Returns
@@ -166,7 +164,7 @@ class ConnectorSQL(ConnectorCSV):
             Polars dataframe with data from MySQL table or local csv file
         """
         if self.timeout == 0:
-            return super().get(table_name)
+            return super().get(name)
         try:
             connection = sql.connect(
                 **env.dict(self.env_key), connection_timeout=self.timeout
@@ -174,8 +172,8 @@ class ConnectorSQL(ConnectorCSV):
             cursor = connection.cursor(
                 dictionary=True
             )  # Ensure that the results are dictionaries, so that polars can understand it.
-            cursor.execute(f"select * from {table_name}")
+            cursor.execute(f"select * from {name}")
             return pl.from_dicts(cursor.fetchall())  # type: ignore
         except Exception as e:
             print(e, "\nWill use local file instead")
-            return super().get(table_name)
+            return super().get(name)
